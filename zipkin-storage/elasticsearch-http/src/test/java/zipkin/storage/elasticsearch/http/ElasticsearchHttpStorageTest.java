@@ -43,7 +43,8 @@ public class ElasticsearchHttpStorageTest {
   @Test
   public void memoizesIndexTemplate() throws Exception {
     es.enqueue(new MockResponse().setBody("{\"version\":{\"number\":\"2.4.0\"}}"));
-    es.enqueue(new MockResponse()); // get template
+    es.enqueue(new MockResponse()); // get span template
+    es.enqueue(new MockResponse()); // get dependency template
     es.enqueue(new MockResponse()); // dependencies request
     es.enqueue(new MockResponse()); // dependencies request
 
@@ -52,10 +53,11 @@ public class ElasticsearchHttpStorageTest {
     storage.spanStore().getDependencies(endTs, TimeUnit.DAYS.toMillis(1));
 
     es.takeRequest(); // get version
-    es.takeRequest(); // get template
+    es.takeRequest(); // get span template
+    es.takeRequest(); // get dependency template
     assertThat(es.takeRequest().getPath())
-        .startsWith("/zipkin-2016-10-01,zipkin-2016-10-02/dependencylink/_search");
+        .startsWith("/zipkin:dependency-2016-10-01,zipkin:dependency-2016-10-02/_search");
     assertThat(es.takeRequest().getPath())
-        .startsWith("/zipkin-2016-10-01,zipkin-2016-10-02/dependencylink/_search");
+        .startsWith("/zipkin:dependency-2016-10-01,zipkin:dependency-2016-10-02/_search");
   }
 }

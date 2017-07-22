@@ -246,8 +246,8 @@ public class ZipkinElasticsearchHttpStorageAutoConfigurationTest {
         ZipkinElasticsearchHttpStorageAutoConfiguration.class);
     context.refresh();
 
-    assertThat(es().indexNameFormatter().indexNameForTimestamp(0))
-        .isEqualTo("zipkin-1970-01-01");
+    assertThat(es().indexNameFormatter().indexNameForTimestamp("span", 0))
+        .isEqualTo("zipkin:span-1970-01-01");
   }
 
   @Test
@@ -262,8 +262,8 @@ public class ZipkinElasticsearchHttpStorageAutoConfigurationTest {
         ZipkinElasticsearchHttpStorageAutoConfiguration.class);
     context.refresh();
 
-    assertThat(es().indexNameFormatter().indexNameForTimestamp(0))
-        .isEqualTo("zipkin_prod-1970-01-01");
+    assertThat(es().indexNameFormatter().indexNameForTimestamp("span", 0))
+        .isEqualTo("zipkin_prod:span-1970-01-01");
   }
 
   @Test
@@ -278,8 +278,8 @@ public class ZipkinElasticsearchHttpStorageAutoConfigurationTest {
         ZipkinElasticsearchHttpStorageAutoConfiguration.class);
     context.refresh();
 
-    assertThat(es().indexNameFormatter().indexNameForTimestamp(0))
-        .isEqualTo("zipkin-1970.01.01");
+    assertThat(es().indexNameFormatter().indexNameForTimestamp("span", 0))
+        .isEqualTo("zipkin:span-1970.01.01");
   }
 
   @Test

@@ -27,7 +27,7 @@ import zipkin.internal.Util;
 
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
-import static zipkin.storage.elasticsearch.http.ElasticsearchHttpSpanStore.SERVICE_SPAN;
+import static zipkin.storage.elasticsearch.http.ElasticsearchHttpSpanStore.SPAN;
 import static zipkin.storage.elasticsearch.http.TestResponses.SERVICE_NAMES;
 import static zipkin.storage.elasticsearch.http.TestResponses.SPAN_NAMES;
 
@@ -45,10 +45,12 @@ public class ElasticsearchHttpSpanStoreTest {
   @Before
   public void getIndexTemplate() throws IOException, InterruptedException {
     es.enqueue(new MockResponse().setBody("{\"version\":{\"number\":\"2.4.0\"}}"));
-    es.enqueue(new MockResponse()); // get template
-    storage.ensureIndexTemplate();
+    es.enqueue(new MockResponse()); // get span template
+    es.enqueue(new MockResponse()); // get dependency template
+    storage.ensureIndexTemplates();
     es.takeRequest(); // get version
-    es.takeRequest(); // get template
+    es.takeRequest(); // get span template
+    es.takeRequest(); // get dependency template
   }
 
   @After
@@ -78,12 +80,12 @@ public class ElasticsearchHttpSpanStoreTest {
 
     // 24 hrs ago always will fall into 2 days (ex. if it is 4:00pm, 24hrs ago is a different day)
     String indexesToSearch = ""
-        + storage.indexNameFormatter().indexNameForTimestamp(yesterday)
+        + storage.indexNameFormatter().indexNameForTimestamp(SPAN, yesterday)
         + ","
-        + storage.indexNameFormatter().indexNameForTimestamp(today);
+        + storage.indexNameFormatter().indexNameForTimestamp(SPAN, today);
 
     RecordedRequest request = es.takeRequest();
     assertThat(request.getPath())
-        .startsWith("/" + indexesToSearch + "/" + SERVICE_SPAN + "/_search");
+        .startsWith("/" + indexesToSearch + "/_search");
   }
 }

@@ -33,7 +33,7 @@ public class SearchCallFactory {
   }
 
   public <V> HttpCall<V> newCall(SearchRequest request, HttpCall.BodyConverter<V> bodyConverter) {
-    Request httpRequest = new Request.Builder().url(lenientSearch(request.indices, request.type))
+    Request httpRequest = new Request.Builder().url(lenientSearch(request.indices))
         .post(RequestBody.create(APPLICATION_JSON, searchRequest.toJson(request)))
         .header("Accept-Encoding", "gzip")
         .tag(request.tag()).build();
@@ -41,10 +41,9 @@ public class SearchCallFactory {
   }
 
   /** Matches the behavior of {@code IndicesOptions#lenientExpandOpen()} */
-  public HttpUrl lenientSearch(List<String> indices, String type) {
+  public HttpUrl lenientSearch(List<String> indices) {
     return http.baseUrl.newBuilder()
         .addPathSegment(join(indices))
-        .addPathSegment(type)
         .addPathSegment("_search")
         // keep these in alphabetical order as it simplifies amazon signatures!
         .addQueryParameter("allow_no_indices", "true")

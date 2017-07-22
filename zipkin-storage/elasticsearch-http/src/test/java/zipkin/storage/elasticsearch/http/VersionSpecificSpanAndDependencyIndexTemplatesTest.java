@@ -24,7 +24,7 @@ import org.junit.rules.ExpectedException;
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class VersionSpecificTemplateTest {
+public class VersionSpecificSpanAndDependencyIndexTemplatesTest {
   @Rule
   public ExpectedException thrown = ExpectedException.none();
   @Rule
@@ -34,7 +34,8 @@ public class VersionSpecificTemplateTest {
       .hosts(asList(es.url("").toString()))
       .build();
 
-  VersionSpecificTemplate client = new VersionSpecificTemplate(storage);
+  VersionSpecificSpanAndDependencyIndexTemplates
+    client = new VersionSpecificSpanAndDependencyIndexTemplates(storage);
 
   @After
   public void close() throws IOException {

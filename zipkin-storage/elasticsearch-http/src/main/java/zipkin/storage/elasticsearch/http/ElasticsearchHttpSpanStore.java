@@ -15,7 +15,6 @@ package zipkin.storage.elasticsearch.http;
 
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -38,19 +37,18 @@ import static java.util.Arrays.asList;
 
 final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
 
+  static final String DEPENDENCY = "dependency";
   static final String SPAN = "span";
-  static final String DEPENDENCY_LINK = "dependencylink";
-  static final String SERVICE_SPAN = "servicespan";
 
   final SearchCallFactory search;
-  final String[] allIndices;
+  final String[] allSpanIndices;
   final IndexNameFormatter indexNameFormatter;
   final boolean strictTraceId;
   final int namesLookback;
 
   ElasticsearchHttpSpanStore(ElasticsearchHttpStorage es) {
     this.search = new SearchCallFactory(es.http());
-    this.allIndices = new String[] {es.indexNameFormatter().allIndices()};
+    this.allSpanIndices = new String[] {es.indexNameFormatter().allSpanIndices()};
     this.indexNameFormatter = es.indexNameFormatter();
     this.strictTraceId = es.strictTraceId();
     this.namesLookback = es.namesLookback();
@@ -63,10 +61,7 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
     SearchRequest.Filters filters = new SearchRequest.Filters();
     filters.addRange("timestamp_millis", beginMillis, endMillis);
     if (request.serviceName != null) {
-      filters.addNestedTerms(asList(
-          "annotations.endpoint.serviceName",
-          "binaryAnnotations.endpoint.serviceName"
-      ), request.serviceName);
+      filters.addTerm("localEndpoint.serviceName", request.serviceName);
     }
 
     if (request.spanName != null) {
@@ -74,28 +69,13 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
     }
 
     for (String annotation : request.annotations) {
-      Map<String, String> annotationValues = new LinkedHashMap<>();
-      annotationValues.put("annotations.value", annotation);
-      Map<String, String> binaryAnnotationKeys = new LinkedHashMap<>();
-      binaryAnnotationKeys.put("binaryAnnotations.key", annotation);
-      if (request.serviceName != null) {
-        annotationValues.put("annotations.endpoint.serviceName", request.serviceName);
-        binaryAnnotationKeys.put("binaryAnnotations.endpoint.serviceName", request.serviceName);
-      }
-      filters.addNestedTerms(annotationValues, binaryAnnotationKeys);
+      filters.should()
+        .addTerm("annotations.value", annotation)
+        .addExists("tags." + annotation);
     }
 
     for (Map.Entry<String, String> kv : request.binaryAnnotations.entrySet()) {
-      // In our index template, we make sure the binaryAnnotation value is indexed as string,
-      // meaning non-string values won't even be indexed at all. This means that we can only
-      // match string values here, which happens to be exactly what we want.
-      Map<String, String> nestedTerms = new LinkedHashMap<>();
-      nestedTerms.put("binaryAnnotations.key", kv.getKey());
-      nestedTerms.put("binaryAnnotations.value", kv.getValue());
-      if (request.serviceName != null) {
-        nestedTerms.put("binaryAnnotations.endpoint.serviceName", request.serviceName);
-      }
-      filters.addNestedTerms(nestedTerms);
+      filters.addTerm("tags." + kv.getKey(), kv.getValue());
     }
 
     if (request.minDuration != null) {
@@ -113,8 +93,9 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
         .addSubAggregation(Aggregation.min("timestamp_millis"))
         .orderBy("timestamp_millis", "desc");
 
-    List<String> indices = indexNameFormatter.indexNamePatternsForRange(beginMillis, endMillis);
-    SearchRequest esRequest = SearchRequest.forIndicesAndType(indices, SPAN)
+    List<String> indices =
+      indexNameFormatter.indexNamePatternsForRange(SPAN, beginMillis, endMillis);
+    SearchRequest esRequest = SearchRequest.create(indices)
         .filters(filters).addAggregation(traceIdTimestamp);
 
     HttpCall<List<String>> traceIdsCall = search.newCall(esRequest, BodyConverters.SORTED_KEYS);
@@ -146,7 +127,7 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
           callback.onSuccess(Collections.emptyList());
           return;
         }
-        SearchRequest request = SearchRequest.forIndicesAndType(indices, SPAN)
+        SearchRequest request = SearchRequest.create(indices)
             .terms("traceId", traceIds);
         search.newCall(request, BodyConverters.SPANS).submit(successCallback);
       }
@@ -182,7 +163,7 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
   public void getRawTrace(long traceIdHigh, long traceIdLow, Callback<List<Span>> callback) {
     String traceIdHex = Util.toLowerHex(strictTraceId ? traceIdHigh : 0L, traceIdLow);
 
-    SearchRequest request = SearchRequest.forIndicesAndType(asList(allIndices), SPAN)
+    SearchRequest request = SearchRequest.create(asList(allSpanIndices))
         .term("traceId", traceIdHex);
 
     search.newCall(request, BodyConverters.NULLABLE_SPANS).submit(callback);
@@ -192,29 +173,17 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
     long endMillis =  System.currentTimeMillis();
     long beginMillis =  endMillis - namesLookback;
 
-    List<String> indices = indexNameFormatter.indexNamePatternsForRange(beginMillis, endMillis);
-    SearchRequest request = SearchRequest.forIndicesAndType(indices, SERVICE_SPAN)
-        .addAggregation(Aggregation.terms("serviceName", Integer.MAX_VALUE));
-
-    search.newCall(request, BodyConverters.SORTED_KEYS).submit(new Callback<List<String>>() {
-      @Override public void onSuccess(List<String> value) {
-        if (!value.isEmpty()) callback.onSuccess(value);
-
-        // Special cased code until sites update their collectors. What this does is do a more
-        // expensive nested query to get service names when the servicespan type returns nothing.
-        SearchRequest.Filters filters = new SearchRequest.Filters();
-        filters.addRange("timestamp_millis", beginMillis, endMillis);
-        SearchRequest request = SearchRequest.forIndicesAndType(indices, SPAN)
-            .filters(filters)
-            .addAggregation(Aggregation.nestedTerms("annotations.endpoint.serviceName"))
-            .addAggregation(Aggregation.nestedTerms("binaryAnnotations.endpoint.serviceName"));
-        search.newCall(request, BodyConverters.SORTED_KEYS).submit(callback);
-      }
-
-      @Override public void onError(Throwable t) {
-        callback.onError(t);
-      }
-    });
+    List<String> indices =
+      indexNameFormatter.indexNamePatternsForRange(SPAN, beginMillis, endMillis);
+    // Service name queries include both local and remote endpoints. This is different than
+    // Span name, as a span name can only be on a local endpoint.
+    SearchRequest.Filters filters = new SearchRequest.Filters();
+    filters.addRange("timestamp_millis", beginMillis, endMillis);
+    SearchRequest request = SearchRequest.create(indices)
+      .filters(filters)
+      .addAggregation(Aggregation.terms("localEndpoint.serviceName", Integer.MAX_VALUE))
+      .addAggregation(Aggregation.terms("remoteEndpoint.serviceName", Integer.MAX_VALUE));
+    search.newCall(request, BodyConverters.SORTED_KEYS).submit(callback);
   }
 
   @Override public void getSpanNames(String serviceName, Callback<List<String>> callback) {
@@ -226,34 +195,18 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
     long endMillis =  System.currentTimeMillis();
     long beginMillis =  endMillis - namesLookback;
 
-    List<String> indices = indexNameFormatter.indexNamePatternsForRange(beginMillis, endMillis);
+    List<String> indices =
+      indexNameFormatter.indexNamePatternsForRange(SPAN, beginMillis, endMillis);
 
-    SearchRequest request = SearchRequest.forIndicesAndType(indices, SERVICE_SPAN)
-        .term("serviceName", serviceName.toLowerCase(Locale.ROOT))
-        .addAggregation(Aggregation.terms("spanName", Integer.MAX_VALUE));
+    // A span name is only valid on a local endpoint, as a span name is defined locally
+    SearchRequest.Filters filters = new SearchRequest.Filters()
+      .addRange("timestamp_millis", beginMillis, endMillis)
+      .addTerm("localEndpoint.serviceName", serviceName.toLowerCase(Locale.ROOT));
 
-    search.newCall(request, BodyConverters.SORTED_KEYS).submit(new Callback<List<String>>() {
-      @Override public void onSuccess(List<String> value) {
-        if (!value.isEmpty()) callback.onSuccess(value);
-
-        // Special cased code until sites update their collectors. What this does is do a more
-        // expensive nested query to get span names when the servicespan type returns nothing.
-        SearchRequest.Filters filters = new SearchRequest.Filters();
-        filters.addRange("timestamp_millis", beginMillis, endMillis);
-        filters.addNestedTerms(asList(
-            "annotations.endpoint.serviceName",
-            "binaryAnnotations.endpoint.serviceName"
-        ), serviceName.toLowerCase(Locale.ROOT));
-        SearchRequest request = SearchRequest.forIndicesAndType(indices, SPAN)
-            .filters(filters)
-            .addAggregation(Aggregation.terms("name", Integer.MAX_VALUE));
-        search.newCall(request, BodyConverters.SORTED_KEYS).submit(callback);
-      }
-
-      @Override public void onError(Throwable t) {
-        callback.onError(t);
-      }
-    });
+    SearchRequest request = SearchRequest.create(indices)
+      .filters(filters)
+      .addAggregation(Aggregation.terms("name", Integer.MAX_VALUE));
+    search.newCall(request, BodyConverters.SORTED_KEYS).submit(callback);
   }
 
   @Override public void getDependencies(long endTs, @Nullable Long lookback,
@@ -262,13 +215,8 @@ final class ElasticsearchHttpSpanStore implements AsyncSpanStore {
     long beginMillis = lookback != null ? endTs - lookback : 0;
     // We just return all dependencies in the days that fall within endTs and lookback as
     // dependency links themselves don't have timestamps.
-    List<String> indices = indexNameFormatter.indexNamePatternsForRange(beginMillis, endTs);
-    getDependencies(indices, callback);
-  }
-
-  void getDependencies(List<String> indices, Callback<List<DependencyLink>> callback) {
-    SearchRequest request = SearchRequest.forIndicesAndType(indices, DEPENDENCY_LINK);
-
-    search.newCall(request, BodyConverters.DEPENDENCY_LINKS).submit(callback);
+    List<String> indices =
+      indexNameFormatter.indexNamePatternsForRange(DEPENDENCY, beginMillis, endTs);
+    search.newCall(SearchRequest.create(indices), BodyConverters.DEPENDENCY_LINKS).submit(callback);
   }
 }

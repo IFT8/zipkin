@@ -26,6 +26,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okio.Buffer;
 import zipkin.internal.Nullable;
+import zipkin.internal.Pair;
 import zipkin.storage.AsyncSpanConsumer;
 import zipkin.storage.AsyncSpanStore;
 import zipkin.storage.SpanStore;
@@ -35,6 +36,8 @@ import zipkin.storage.elasticsearch.http.internal.client.HttpCall;
 
 import static zipkin.internal.Util.checkNotNull;
 import static zipkin.moshi.JsonReaders.enterPath;
+import static zipkin.storage.elasticsearch.http.ElasticsearchHttpSpanStore.DEPENDENCY;
+import static zipkin.storage.elasticsearch.http.ElasticsearchHttpSpanStore.SPAN;
 
 @AutoValue
 public abstract class ElasticsearchHttpStorage implements StorageComponent {
@@ -133,7 +136,8 @@ public abstract class ElasticsearchHttpStorage implements StorageComponent {
      * The date separator to use when generating daily index names. Defaults to '-'.
      *
      * <p>By default, spans with a timestamp falling on 2016/03/19 end up in the index
-     * 'zipkin-2016-03-19'. When the date separator is '.', the index would be 'zipkin-2016.03.19'.
+     * 'zipkin:span-2016-03-19'. When the date separator is '.', the index would be
+     * 'zipkin:span-2016.03.19'.
      */
     public final Builder dateSeparator(char dateSeparator) {
       indexNameFormatterBuilder().dateSeparator(dateSeparator);
@@ -199,29 +203,30 @@ public abstract class ElasticsearchHttpStorage implements StorageComponent {
 
   @Override
   public AsyncSpanStore asyncSpanStore() {
-    ensureIndexTemplate();
+    ensureIndexTemplates();
     return new ElasticsearchHttpSpanStore(this);
   }
 
   @Override
   public AsyncSpanConsumer asyncSpanConsumer() {
-    ensureIndexTemplate();
+    ensureIndexTemplates();
     return new ElasticsearchHttpSpanConsumer(this);
   }
 
   /** This is a blocking call, only used in tests. */
   void clear() throws IOException {
-    clear(indexNameFormatter().allIndices());
+    clear(indexNameFormatter().allSpanIndices());
+    clear(indexNameFormatter().allDependencyIndices());
   }
 
-  void clear(String index) throws IOException {
+  void clear(String indices) throws IOException {
     Request deleteRequest = new Request.Builder()
-        .url(http().baseUrl.newBuilder().addPathSegment(index).build())
-        .delete().tag("delete-index").build();
+        .url(http().baseUrl.newBuilder().addPathSegment(indices).build())
+        .delete().tag("delete-indices").build();
 
     http().execute(deleteRequest, b -> null);
 
-    flush(http(), index);
+    flush(http(), indices);
   }
 
   /** This is a blocking call, only used in tests. */
@@ -236,7 +241,7 @@ public abstract class ElasticsearchHttpStorage implements StorageComponent {
 
   /** This is blocking so that we can determine if the cluster is healthy or not */
   @Override public CheckResult check() {
-    return ensureClusterReady(indexNameFormatter().allIndices());
+    return ensureClusterReady(indexNameFormatter().allSpanIndices());
   }
 
   CheckResult ensureClusterReady(String index) {
@@ -262,13 +267,16 @@ public abstract class ElasticsearchHttpStorage implements StorageComponent {
   }
 
   @Memoized // since there's a network call required to get the version
-  String indexTemplate() {
-    return new VersionSpecificTemplate(this).get(http());
+  Pair<String> spanAndDependencyIndexTemplates() {
+    return new VersionSpecificSpanAndDependencyIndexTemplates(this).get(http());
   }
 
-  @Memoized // since we don't want overlapping calls to apply the index template
-  boolean ensureIndexTemplate() {
-    EnsureIndexTemplate.apply(http(), indexNameFormatter().index() + "_template", indexTemplate());
+  @Memoized // since we don't want overlapping calls to apply the index templates
+  boolean ensureIndexTemplates() {
+    String index = indexNameFormatter().index();
+    Pair<String> spanAndDependency = spanAndDependencyIndexTemplates();
+    EnsureIndexTemplate.apply(http(), index + ":" + SPAN + "_template", spanAndDependency._1);
+    EnsureIndexTemplate.apply(http(), index + ":" + DEPENDENCY + "_template", spanAndDependency._2);
     return true; // as Memoized cannot return void
   }
 
